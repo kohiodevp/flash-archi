@@ -1,0 +1,16 @@
+{
+  "name": "@flash-archi/sdk",
+  "version": "1.0.0",
+  "description": "TypeScript SDK for Flash-Archi Public API",
+  "main": "src/index.js",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": ["flash-archi", "sdk", "api", "client"],
+  "author": "Flash-Archi Team",
+  "license": "MIT"
+}

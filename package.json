@@ -1,0 +1,60 @@
+{
+  "name": "flash-archi-saas",
+  "version": "3.3.0",
+  "description": "Flash-Archi SaaS — moteur de génération architecturale autonome (plan 2D + façades) exposé en API REST avec jobs asynchrones, SSE et routage multi-providers.",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test tests/**/*.test.{mjs,cjs}",
+    "migrate:up": "node scripts/migrate.js up",
+    "migrate:down": "node scripts/migrate.js down",
+    "migrate:status": "node scripts/migrate.js status",
+    "lint": "node --check src/app.js && node --check src/versioning.js && node --check src/middleware/db.js && node --check src/middleware/public-auth.js && node --check src/middleware/public-rate-limit.js && node --check src/publicStore.js && node --check src/routes/public.js && node --check src/webhooks.js && node --check src/routes/webhooks.js && node --check scripts/migrate.js",
+    "format:check": "node --check src/app.js && node --check src/index.js && node --check src/logger.js && node --check scripts/migrate.js"
+  },
+  "keywords": [
+    "flash-archi",
+    "architecture",
+    "plan-2d",
+    "facades",
+    "llm",
+    "saas",
+    "rest"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^9.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.7.0",
+    "js-yaml": "^4.1.0",
+    "pg": "^8.23.0",
+    "pino": "^10.0.0",
+    "pino-http": "^11.0.0",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^9.0.1",
+    "yamljs": "^0.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@apidevtools/swagger-parser": "^12.1.0",
+    "@playwright/test": "^1.62.1",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.9",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.1.1",
+    "chai": "^6.2.2",
+    "playwright": "^1.62.1",
+    "semantic-release": "^25.0.9",
+    "sinon": "^22.1.0",
+    "supertest": "^7.0.0"
+  },
+  "type": "module"
+}

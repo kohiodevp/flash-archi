@@ -1,0 +1,36 @@
+providers:
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    models:
+      text: "openai/gpt-4o-mini"
+      image: "black-forest-labs/flux-pro"
+    fallback: "openai/gpt-4o-mini"
+  groq:
+    base_url: "https://api.groq.com/openai/v1"
+    models:
+      nlp: "llama-3.3-70b-versatile"
+      fast_parse: "llama-3.1-8b-instant"
+  ollama:
+    base_url: "http://localhost:11434"
+    models:
+      fallback_text: "llama3.1:8b"
+      cache: "phi3:mini"
+  seekai:
+    base_url: "https://seekai.cc/v1"
+    models:
+      text: "deepseek-v4-pro"
+    fallback: "openai/gpt-4o-mini"
+
+routing:
+  strategy: "cost_quality_balance"
+  rules:
+    - condition: "complexity < 0.3"
+      provider: "ollama"
+    - condition: "complexity < 0.7 AND urgency = high"
+      provider: "groq"
+    - condition: "complexity >= 0.7"
+      provider: "openrouter"
+
+cache:
+  ttl_ms: 3600000
+  max_entries: 500

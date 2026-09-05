@@ -1,0 +1,46 @@
+# ===========================================================
+# Flash-Archi SaaS — Orchestration Docker Compose
+#
+#  DÉPLOIEMENT derrière Nginx Proxy Manager (npm-net) :
+#  - CONTAINER_NAME = flash-archi-api  → résolution DNS dans npm-net
+#  - Aucun port hôte exposé : NPM route /api/** + /health* vers
+#    http://flash-archi-api:8080
+#  - Auth ACTIVÉE : exige API_KEY dans .env (via env_file, jamais
+#    écrite en clair dans ce fichier).
+#  - PORT imposé à 8080 (le .env local peut porter 8081 → on écrase).
+#    NB : le Dockerfile expose 8094 mais le serveur écoute config.server.port
+#    = PORT, donc on force 8080 pour cohérence + healthcheck.
+# ===========================================================
+
+services:
+  flash-archi:
+    build: .
+    image: flash-archi-saas:latest
+    container_name: flash-archi-api
+    restart: unless-stopped
+    # Secrets & params sensibles lus depuis .env (pas en dur ici)
+    env_file: .env
+    environment:
+      - AUTH_ENABLED=true
+      - PORT=8080
+      - HOST=0.0.0.0
+      - DB_PATH=/app/data/flash-archi.db
+    volumes:
+      # Données SQLite persistées dans un volume nommé (survit au rebuild)
+      - flash_archi_data:/app/data
+    networks:
+      - npm-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  flash_archi_data:
+
+networks:
+  npm-net:
+    external: true
+    name: npm-net

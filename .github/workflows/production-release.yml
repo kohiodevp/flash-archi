@@ -1,0 +1,198 @@
+name: Production Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    uses: ./.github/workflows/pr-validation.yml
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign Docker image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign --key env://COSIGN_PRIVATE_KEY \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+
+  load-test:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run reduced baseline load test (10 min)
+        run: k6 run --duration 10m --vus 50 tests/k6/baseline.js
+      - name: Run reduced burst load test (10 min)
+        run: k6 run --duration 10m --vus 200 tests/k6/burst.js
+
+  deploy-production:
+    needs: load-test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy via SSH (blue/green with safe template)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/flash-archi
+            
+            if [ -f .active-backend ]; then
+              ACTIVE_BACKEND=$(cat .active-backend)
+            else
+              ACTIVE_BACKEND="api-blue"
+              echo "$ACTIVE_BACKEND" > .active-backend
+            fi
+            
+            INACTIVE_BACKEND="api-green"
+            if [ "$ACTIVE_BACKEND" = "api-blue" ]; then
+              INACTIVE_BACKEND="api-green"
+            else
+              INACTIVE_BACKEND="api-blue"
+            fi
+            
+            echo "ACTIVE_BACKEND=$INACTIVE_BACKEND" > .env.next
+            docker compose -f docker-compose.${INACTIVE_BACKEND#api-}.yml --env-file .env.next pull
+            docker compose -f docker-compose.${INACTIVE_BACKEND#api-}.yml --env-file .env.next up -d
+            
+            for i in {1..30}; do
+              if curl -sf http://localhost:8094/healthz > /dev/null; then
+                echo "✅ $INACTIVE_BACKEND healthy"
+                break
+              fi
+              sleep 2
+            done
+            
+            mv .env.next .env
+            caddy reload --config /etc/caddy/Caddyfile
+            docker compose -f docker-compose.${ACTIVE_BACKEND#api-}.yml down
+            echo "$INACTIVE_BACKEND" > .active-backend
+
+      - name: Run database migrations
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /opt/flash-archi
+            docker compose run --rm api npm run migrate:up
+
+  smoke-test-prod:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download smoke test
+        run: |
+          curl -L -o smoke-test.sh https://raw.githubusercontent.com/flash-archi/flash-archi/main/smoke-test.sh
+          chmod +x smoke-test.sh
+      - name: Run smoke tests
+        run: ./smoke-test.sh https://flash-archi.com ${{ secrets.PROD_API_KEY }}
+
+  post-deploy-monitoring:
+    needs: smoke-test-prod
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Monitor error rate via SSH (30 min, 6 checks of 5 min)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            for i in {1..6}; do
+              ERROR_RATE=$(curl -s http://localhost:9090/api/v1/query?query=rate(http_requests_total{status=~"5.."}[5m]) | jq -r '.data.result[0].value[1]')
+              if (( $(echo "$ERROR_RATE > 0.05" | bc -l) )); then
+                echo "❌ Error rate too high: $ERROR_RATE"
+                exit 1
+              fi
+              echo "✅ Check $i/6 passed: error rate $ERROR_RATE"
+              sleep 300
+            done
+            echo "✅ Post-deploy monitoring passed"
+
+  cost-estimation:
+    needs: post-deploy-monitoring
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Calculate estimated monthly cost via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            LLM_COST_10MIN=$(curl -s http://localhost:9090/api/v1/query?query=increase(flash_archi_llm_cost_usd_total[10m]) | jq -r '.data.result[0].value[1]')
+            MONTHLY_COST=$(echo "$LLM_COST_10MIN * 6 * 24 * 30" | bc -l)
+            echo "Estimated monthly LLM cost: \$$MONTHLY_COST"
+            if (( $(echo "$MONTHLY_COST > 1000" | bc -l) )); then
+              echo "⚠️ Warning: Estimated cost exceeds \$1000/month"
+              exit 1
+            fi
+
+  create-release:
+    needs: cost-estimation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # semantic-release needs full history
+      - name: Generate Changelog and Create Release
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate SBOM (Software Bill of Materials)
+        uses: anchore/sbom-action@v1
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+          output-file: sbom.json
+      - name: Upload SBOM as release asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: sbom.json

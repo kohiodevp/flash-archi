@@ -1,0 +1,49 @@
+name: Monthly Rollback Drill
+
+on:
+  schedule:
+    - cron: '0 2 1 * *' # First day of the month at 02:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  rollback-drill:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Deploy previous version (deterministic, saved tag)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/flash-archi
+            PREVIOUS_TAG=$(cat .previous-image-tag)
+            test -n "$PREVIOUS_TAG" || exit 1
+            echo "Rolling back to ghcr.io/flash-archi:$PREVIOUS_TAG"
+            docker compose down
+            docker compose up -d ghcr.io/flash-archi:$PREVIOUS_TAG
+            sleep 30
+            docker compose ps | grep -q "healthy" || exit 1
+
+      - name: Redeploy current version
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/flash-archi
+            docker compose pull
+            docker compose up -d
+            sleep 30
+            docker compose ps | grep -q "healthy" || exit 1
+
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          text: "✅ Monthly rollback drill completed successfully"
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}

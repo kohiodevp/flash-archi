@@ -1,0 +1,44 @@
+# Caddyfile pour Flash-Archi staging
+# Remplacer staging.flash-archi.local par votre domaine réel
+
+staging.flash-archi.local {
+    # TLS automatique si domaine public
+    # Sinon, utiliser mkcert ou certificat auto-signé
+
+    # Headers de sécurité
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    }
+
+    # Limite taille body (100 Mo pour les uploads IFC/images)
+    request_body {
+        max_size 100MB
+    }
+
+    # Proxy vers l'API
+    reverse_proxy api:8094 {
+        # Flush immédiat pour SSE
+        flush_interval -1
+        
+        # Timeouts adaptés aux jobs longs
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 0
+        }
+    }
+
+    # Logs d'accès
+    log {
+        output file /var/log/caddy/access.log
+        format json
+    }
+}
+
+# Redirection HTTP → HTTPS
+http://staging.flash-archi.local {
+    redir https://staging.flash-archi.local{uri} permanent
+}

@@ -1,0 +1,1223 @@
+openapi: 3.0.3
+info:
+  title: Flash-Archi Public API
+  description: >
+    API publique de Flash-Archi (pré-production) — projets, jobs,
+    artefacts, versions et webhooks.
+
+    Clés d'accès :
+    - **API publique** (`/api/public/v1/**`) : clé Bearer étendue avec scopes
+      `public:*`, résolue par tenant (plan : free / pro / enterprise).
+    - **API interne** (`/api/flash-archi/projects/**/versions/**`)
+      : clé applicative `API_KEY` (environnement), scopes internes.
+
+    Tous les endpoints honorent le rate limiting (headers `X-RateLimit-*`).
+  version: 3.3.0
+  contact:
+    name: Flash-Archi
+servers:
+- url: /
+  description: "Racine \u2014 chemins complets (API publique + interne)"
+tags:
+- name: Projets
+  description: Gestion des projets (API publique)
+- name: Jobs
+  description: "G\xE9n\xE9ration d'architecture et suivi (API publique)"
+- name: Versions
+  description: Historique et comparaison des versions (API interne)
+- name: Webhooks
+  description: "Abonnements aux \xE9v\xE9nements (API publique, scope public:manage:webhooks)"
+- name: Analytics
+  description: Analytics endpoints for tenants and administrators
+paths:
+  /api/public/v1/projects:
+    get:
+      tags:
+      - Projets
+      summary: Lister les projets du tenant
+      operationId: listProjects
+      security:
+      - PublicKeyAuth:
+        - public:read:projects
+      parameters:
+      - $ref: '#/components/parameters/PaginationLimit'
+      - $ref: '#/components/parameters/PaginationOffset'
+      responses:
+        '200':
+          description: "Liste des projets (isol\xE9e par tenant via RLS)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - limit
+                - offset
+                - count
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Project'
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      tags:
+      - Projets
+      summary: "Cr\xE9er un projet"
+      operationId: createProject
+      security:
+      - PublicKeyAuth:
+        - public:write:projects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectInput'
+      responses:
+        '201':
+          description: "Projet cr\xE9\xE9"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/projects/{projectId}:
+    get:
+      tags:
+      - Projets
+      summary: Lire un projet du tenant
+      operationId: getProject
+      security:
+      - PublicKeyAuth:
+        - public:read:projects
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      responses:
+        '200':
+          description: Projet
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/projects/{projectId}/jobs:
+    post:
+      tags:
+      - Jobs
+      summary: "Lancer une g\xE9n\xE9ration d'architecture pour un projet"
+      operationId: createJob
+      security:
+      - PublicKeyAuth:
+        - public:write:jobs
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - prompt
+              properties:
+                prompt:
+                  type: string
+                  description: "Description de la g\xE9n\xE9ration"
+                  example: "Extension de 20 m\xB2 avec garage"
+      responses:
+        '202':
+          description: "Job cr\xE9\xE9 et en file d'attente"
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - jobId
+                - status
+                properties:
+                  jobId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum:
+                    - pending
+                    - running
+                    - completed
+                    - failed
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/jobs/{jobId}:
+    get:
+      tags:
+      - Jobs
+      summary: "Lire l'\xE9tat d'un job"
+      operationId: getJob
+      security:
+      - PublicKeyAuth:
+        - public:read:jobs
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/jobs/{jobId}/artifacts:
+    get:
+      tags:
+      - Jobs
+      summary: "R\xE9cup\xE9rer les artefacts d'un job termin\xE9"
+      operationId: getJobArtifacts
+      security:
+      - PublicKeyAuth:
+        - public:read:artifacts
+      parameters:
+      - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: "Artefacts (spec, plan 2D, fa\xE7ades, IFC, m\xE9triques BIM)"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactBundle'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/webhooks:
+    get:
+      tags:
+      - Webhooks
+      summary: Lister les abonnements webhook (sans secrets)
+      operationId: listWebhooks
+      security:
+      - PublicKeyAuth:
+        - public:manage:webhooks
+      responses:
+        '200':
+          description: Liste des webhooks du tenant
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WebhookSubscription'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      tags:
+      - Webhooks
+      summary: "Créer un abonnement webhook (le secret est retourné une seule fois)"
+      operationId: createWebhook
+      security:
+      - PublicKeyAuth:
+        - public:manage:webhooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - url
+              - events
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  description: "URL de r\xE9ception du webhook"
+                  example: https://hooks.example.com/fa
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                    - job.completed
+                    - job.failed
+                    - project.created
+                    - project.updated
+                  minItems: 1
+                  example:
+                  - job.completed
+                  - job.failed
+      responses:
+        '201':
+          description: "Webhook cr\xE9\xE9"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookWithSecret'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/webhooks/{webhookId}:
+    get:
+      tags:
+      - Webhooks
+      summary: "Lire un webhook (secret masqu\xE9)"
+      operationId: getWebhook
+      security:
+      - PublicKeyAuth:
+        - public:manage:webhooks
+      parameters:
+      - $ref: '#/components/parameters/WebhookId'
+      responses:
+        '200':
+          description: Webhook (sans secret)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscription'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    patch:
+      tags:
+      - Webhooks
+      summary: Modifier un webhook (url, events, active)
+      operationId: updateWebhook
+      security:
+      - PublicKeyAuth:
+        - public:manage:webhooks
+      parameters:
+      - $ref: '#/components/parameters/WebhookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  format: uri
+                events:
+                  type: array
+                  items:
+                    type: string
+                    enum:
+                    - job.completed
+                    - job.failed
+                    - project.created
+                    - project.updated
+                active:
+                  type: boolean
+              minProperties: 1
+      responses:
+        '200':
+          description: "Webhook mis \xE0 jour (sans secret)"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSubscription'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      tags:
+      - Webhooks
+      summary: Supprimer un abonnement webhook
+      operationId: deleteWebhook
+      security:
+      - PublicKeyAuth:
+        - public:manage:webhooks
+      parameters:
+      - $ref: '#/components/parameters/WebhookId'
+      responses:
+        '204':
+          description: "Webhook supprim\xE9"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/flash-archi/projects/{projectId}/versions:
+    get:
+      tags:
+      - Versions
+      summary: Lister les versions d'un projet (API interne)
+      operationId: listVersions
+      security:
+      - InternalKeyAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/PaginationLimit'
+      - $ref: '#/components/parameters/PaginationOffset'
+      responses:
+        '200':
+          description: Liste des versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - count
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Version'
+                  count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags:
+      - Versions
+      summary: "Cr\xE9er une version (API interne)"
+      operationId: createVersion
+      security:
+      - InternalKeyAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VersionInput'
+      responses:
+        '201':
+          description: "Version cr\xE9\xE9e"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/flash-archi/projects/{projectId}/versions/{versionId}:
+    get:
+      tags:
+      - Versions
+      summary: Lire une version (API interne)
+      operationId: getVersion
+      security:
+      - InternalKeyAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/VersionId'
+      responses:
+        '200':
+          description: Version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/flash-archi/projects/{projectId}/versions/{versionId}/restore:
+    post:
+      tags:
+      - Versions
+      summary: Restaurer une version (API interne)
+      operationId: restoreVersion
+      security:
+      - InternalKeyAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - $ref: '#/components/parameters/VersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - message
+              properties:
+                message:
+                  type: string
+                  description: "Message associ\xE9 \xE0 la restauration"
+                  example: "Retour \xE0 la version 2"
+      responses:
+        '200':
+          description: "Restauration r\xE9ussie"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Version'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/flash-archi/projects/{projectId}/versions/{versionA}/compare/{versionB}:
+    get:
+      tags:
+      - Versions
+      summary: Comparer deux versions (API interne)
+      operationId: compareVersions
+      security:
+      - InternalKeyAuth: []
+      parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: versionA
+        in: path
+        required: true
+        schema:
+          type: string
+        description: "ID de la premi\xE8re version"
+      - name: versionB
+        in: path
+        required: true
+        schema:
+          type: string
+        description: ID de la seconde version
+      responses:
+        '200':
+          description: "Diff\xE9rence entre les deux versions"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/public/v1/analytics/snapshot:
+    get:
+      tags:
+      - Analytics
+      summary: List analytics snapshots for the tenant
+      operationId: listAnalyticsSnapshots
+      security:
+      - PublicKeyAuth:
+        - public:read:analytics
+      parameters:
+      - $ref: '#/components/parameters/PaginationLimit'
+      - $ref: '#/components/parameters/PaginationOffset'
+      - name: period_type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - day
+          - week
+          - month
+      - name: period_start
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: period_end
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: List of analytics snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - limit
+                - offset
+                - count
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AnalyticsSnapshot'
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/analytics/export:
+    get:
+      tags:
+      - Analytics
+      summary: Export analytics data
+      operationId: exportAnalytics
+      security:
+      - PublicKeyAuth:
+        - public:read:analytics
+      parameters:
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - json
+          - csv
+          default: json
+      - name: from
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: Analytics data export
+          content:
+            application/json: {}
+            text/csv: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/analytics/config:
+    get:
+      tags:
+      - Analytics
+      summary: Get analytics configuration for the tenant
+      operationId: getAnalyticsConfig
+      security:
+      - PublicKeyAuth:
+        - public:read:analytics
+      responses:
+        '200':
+          description: Analytics configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    patch:
+      tags:
+      - Analytics
+      summary: Update analytics configuration for the tenant
+      operationId: patchAnalyticsConfig
+      security:
+      - PublicKeyAuth:
+        - public:write:analytics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalyticsConfigInput'
+      responses:
+        '200':
+          description: Updated analytics configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/admin/analytics/snapshot:
+    get:
+      tags:
+      - Analytics
+      summary: List analytics snapshots for all tenants (admin)
+      operationId: listAdminAnalyticsSnapshots
+      security:
+      - PublicKeyAuth:
+        - admin:analytics
+      parameters:
+      - $ref: '#/components/parameters/PaginationLimit'
+      - $ref: '#/components/parameters/PaginationOffset'
+      - name: tenant_id
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: period_type
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - day
+          - week
+          - month
+      - name: period_start
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      - name: period_end
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: List of analytics snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - items
+                - limit
+                - offset
+                - count
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AnalyticsSnapshot'
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+                  count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /api/public/v1/admin/analytics/export:
+    get:
+      tags:
+      - Analytics
+      summary: Export analytics data for all tenants (admin)
+      operationId: exportAdminAnalytics
+      security:
+      - PublicKeyAuth:
+        - admin:analytics
+      parameters:
+      - name: tenant_id
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - json
+          - csv
+          default: json
+      - name: from
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      - name: to
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: Analytics data export
+          content:
+            application/json: {}
+            text/csv: {}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  securitySchemes:
+    PublicKeyAuth:
+      type: http
+      scheme: bearer
+      description: "Cl\xE9 API publique (scope `public:*`) r\xE9solue par tenant.
+        \ Le scope requis est indiqu\xE9 par endpoint. Plans : free=100 req/min, pro=500
+        \ req/min, enterprise=1000 req/min.\n"
+    InternalKeyAuth:
+      type: http
+      scheme: bearer
+      description: "Cl\xE9 applicative interne `API_KEY` (routes versions)."
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Identifiant du projet
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Identifiant du job
+    VersionId:
+      name: versionId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Identifiant de la version
+    WebhookId:
+      name: webhookId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Identifiant du webhook
+    PaginationLimit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+      description: "Nombre d'\xE9l\xE9ments (max 100)"
+    PaginationOffset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+      description: "D\xE9calage de pagination"
+  schemas:
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        prompt:
+          type: string
+        parameters:
+          type: object
+          additionalProperties: true
+        tenant_id:
+          type: integer
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ProjectInput:
+      type: object
+      required:
+      - name
+      - prompt
+      properties:
+        name:
+          type: string
+          example: Villa contemporaine
+        prompt:
+          type: string
+          example: "Maison familiale de 120 m\xB2 avec garage"
+        parameters:
+          type: object
+          additionalProperties: true
+          example:
+            levels: 1
+            style: contemporain
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - pending
+          - running
+          - completed
+          - failed
+        prompt:
+          type: string
+        result:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    ArtifactBundle:
+      type: object
+      description: "R\xE9sultat d'une g\xE9n\xE9ration termin\xE9e"
+      properties:
+        spec:
+          type: object
+          additionalProperties: true
+        plan2d:
+          type: object
+          additionalProperties: true
+        facades:
+          type: object
+          properties:
+            north:
+              type: object
+              additionalProperties: true
+            south:
+              type: object
+              additionalProperties: true
+            east:
+              type: object
+              additionalProperties: true
+            west:
+              type: object
+              additionalProperties: true
+        ifcModel:
+          type: string
+          nullable: true
+        bimMetrics:
+          type: object
+          additionalProperties: true
+    Version:
+      type: object
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        state:
+          type: object
+          additionalProperties: true
+        message:
+          type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    VersionInput:
+      type: object
+      required:
+      - message
+      properties:
+        message:
+          type: string
+          example: Version initiale
+    WebhookSubscription:
+      type: object
+      description: "Abonnement webhook (le secret n'est JAMAIS expos\xE9)"
+      properties:
+        id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+            - job.completed
+            - job.failed
+            - project.created
+            - project.updated
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WebhookWithSecret:
+      allOf:
+      - $ref: '#/components/schemas/WebhookSubscription'
+      - type: object
+        description: "Retourn\xE9 UNIQUEMENT \xE0 la cr\xE9ation"
+        required:
+        - secret
+        properties:
+          secret:
+            type: string
+            description: "Cl\xE9 HMAC-SHA256 \u2014 \xE0 conserver, non r\xE9cup\xE9
+              rable ensuite"
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    AnalyticsSnapshot:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: integer
+        period_type:
+          type: string
+          enum:
+          - day
+          - week
+          - month
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        metrics:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - tenant_id
+      - period_type
+      - period_start
+      - period_end
+      - metrics
+      - created_at
+    AnalyticsConfig:
+      type: object
+      properties:
+        tenant_id:
+          type: integer
+        cost_threshold_usd:
+          type: number
+          format: float
+        error_rate_threshold:
+          type: number
+          format: float
+        job_depth_threshold:
+          type: integer
+        queue_depth_threshold:
+          type: integer
+        alert_email_enabled:
+          type: boolean
+        alert_webhook_enabled:
+          type: boolean
+      required:
+      - tenant_id
+    AnalyticsConfigInput:
+      type: object
+      properties:
+        cost_threshold_usd:
+          type: number
+          format: float
+        error_rate_threshold:
+          type: number
+          format: float
+        job_depth_threshold:
+          type: integer
+        queue_depth_threshold:
+          type: integer
+        alert_email_enabled:
+          type: boolean
+        alert_webhook_enabled:
+          type: boolean
+  responses:
+    BadRequest:
+      description: "Requ\xEAte invalide"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: "Authentification \xE9chou\xE9e ou cl\xE9 manquante"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Scope insuffisant pour cette ressource
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: "Ressource introuvable (ou hors du tenant \u2014 RLS, 404 volontaire)"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: "Conflit (ex. rollback bloqu\xE9 par une collaboration active)"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: "Quota d\xE9pass\xE9"
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+      headers:
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+          description: "Quota de la fen\xEAtre"
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+          description: "Requ\xEAtes restantes dans la fen\xEAtre"
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+          description: "Timestamp (ms) de r\xE9initialisation"
+        Retry-After:
+          schema:
+            type: integer
+          description: "Secondes avant retry autoris\xE9"
