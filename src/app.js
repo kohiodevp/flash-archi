@@ -38,7 +38,8 @@ app.use(httpLogger);
 // L'API publique (P2-03) a sa propre authentification par clé API + scopes : on
 // l'exclut explicitement de l'authentification interne.
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/public/v1')) return next(); // auth publique (routée ailleurs)
+  // Exclusions auth : API publique (P2-03) + newsletter landing (P2-03)
+  if (req.path.startsWith('/public/v1') || req.path.startsWith('/newsletter')) return next();
   return authenticate(req, res, next);
 });
 
@@ -58,7 +59,8 @@ const apiLimiter = rateLimit({
   }
 });
 app.use('/api/', (req, res, next) => {
-  if (req.path.startsWith('/public/v1')) return next(); // rate limiting par plan (P2-03), routé ailleurs
+  // Exclusions rate-limit : API publique + newsletter landing
+  if (req.path.startsWith('/public/v1') || req.path.startsWith('/newsletter')) return next();
   return apiLimiter(req, res, next);
 });
 
@@ -305,6 +307,28 @@ app.get('/api/flash-archi/projects/:projectId/versions/:v1/compare/:v2', authent
     console.error('Error comparing versions:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// ---- Newsletter : pré-inscription au paiement (P2-03) ----------
+// POST public (pas d'API key : landing/pricing sans auth) :
+//   { email, plan?, message? }  ->  201 { email, plan, subscribed }
+// GET interne (list/tests) :
+//   /api/flash-archi/newsletter  ->  { items: [...] }
+import { subscribe as newsletterSubscribe, list as newsletterList } from './newsletter.js';
+app.post('/api/newsletter', (req, res) => {
+  try {
+    const { email, plan, message } = req.body ?? {};
+    const result = newsletterSubscribe({ email, plan, message });
+    res.status(201).json(result);
+  } catch (err) {
+    const status = err?.status ?? 500;
+    const msg = status === 500 ? 'Internal server error' : err.message;
+    if (status === 500) console.error('[flash-archi-saas] newsletter error:', err);
+    res.status(status).json({ error: msg });
+  }
+});
+app.get('/api/flash-archi/newsletter', authenticate, (_req, res) => {
+  res.json({ items: newsletterList() });
 });
 
 // ---- Middleware d'erreur unifié (dernier recours) ---------------
