@@ -18,6 +18,8 @@ RUN npm ci --omit=dev && \
 # Copier le code source
 COPY src ./src
 COPY scripts ./scripts
+# OpenAPI spec chargée au démarrage (app.js → openapi/spec.yaml) — indispensable
+COPY openapi ./openapi
 
 # Créer utilisateur non-root
 RUN addgroup -S app && \
@@ -31,12 +33,12 @@ VOLUME ["/app/data", "/backups"]
 # Basculer vers utilisateur non-root
 USER app
 
-# Port exposé (interne seulement, proxy devant)
-EXPOSE 8094
+# Port interne réel : le serveur écoute sur config.server.port = PORT (8080)
+EXPOSE 8080
 
-# Health check
+# Health check (aligné sur PORT ; le compose peut redéclarer un healthcheck)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-  CMD node -e "fetch('http://127.0.0.1:8094/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Démarrage
 CMD ["node", "src/index.js"]
