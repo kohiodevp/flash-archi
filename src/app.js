@@ -16,6 +16,7 @@ import publicRouter from './routes/public.js';
 import webhooksRouter from './routes/webhooks.js';
 import analyticsRouter from './routes/analytics.js';
 import adminAnalyticsRouter from './routes/admin-analytics.js';
+import { paymentStore } from './payments-store.js';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yamljs';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +40,8 @@ app.use(httpLogger);
 // l'exclut explicitement de l'authentification interne.
 app.use('/api/', (req, res, next) => {
   // Exclusions auth : API publique (P2-03) + newsletter landing (P2-03)
-  if (req.path.startsWith('/public/v1') || req.path.startsWith('/newsletter')) return next();
+  // + webhook Orange Money (P3-03, appelé par Orange sans Bearer).
+  if (req.path.startsWith('/public/v1') || req.path.startsWith('/newsletter') || req.path.startsWith('/payment/orange/webhook')) return next();
   return authenticate(req, res, next);
 });
 
@@ -131,6 +133,20 @@ app.post('/api/flash-archi/generate', (req, res) => {
     return;
   }
   const { prompt } = check.data;
+
+  // Quota mensuel (P3-03) : uniquement si le compte existe dans le store
+  // (donc abonnement en cours) — les tests/anciens clients sans compte
+  // restent inchangés pour ne pas casser la rétro-compat.
+  const userId = req.auth?.apiKey ?? req.apiKey?.prefix;
+  if (userId && paymentStore.getUser(userId)) {
+    if (!paymentStore.consumeQuota(userId)) {
+      return res.status(402).json({
+        error: 'quota_exhausted',
+        message: 'Quota mensuel épuisé. Passez au plan PRO pour continuer.',
+      });
+    }
+  }
+
   const job = jobStore.create(prompt);
   runJobAsync(generateArchitecture, job.id, job.prompt) // asynchrone, ne bloque pas la réponse
   res.status(202).json({ jobId: job.id, status: job.status });
@@ -330,6 +346,11 @@ app.post('/api/newsletter', (req, res) => {
 app.get('/api/flash-archi/newsletter', authenticate, (_req, res) => {
   res.json({ items: newsletterList() });
 });
+
+// ---- Paiement Orange Money (P3-03) -----------------------------
+// Routes /api/payment/*
+import paymentRouter from './routes/payment.js';
+app.use('/api/payment', paymentRouter);
 
 // ---- Middleware d'erreur unifié (dernier recours) ---------------
 // Consomme l'erreur et retourne un JSON sans fuite de pile en production.

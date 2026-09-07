@@ -13,7 +13,7 @@
     "migrate:up": "node scripts/migrate.js up",
     "migrate:down": "node scripts/migrate.js down",
     "migrate:status": "node scripts/migrate.js status",
-    "lint": "node --check src/app.js && node --check src/versioning.js && node --check src/middleware/db.js && node --check src/middleware/public-auth.js && node --check src/middleware/public-rate-limit.js && node --check src/publicStore.js && node --check src/routes/public.js && node --check src/webhooks.js && node --check src/routes/webhooks.js && node --check scripts/migrate.js",
+    "lint": "node --check src/app.js && node --check src/versioning.js && node --check src/middleware/db.js && node --check src/middleware/public-auth.js && node --check src/middleware/public-rate-limit.js && node --check src/publicStore.js && node --check src/routes/public.js && node --check src/webhooks.js && node --check src/routes/webhooks.js && node --check src/routes/payment.js && node --check src/payments-store.js && node --check src/services/orange-money.js && node --check scripts/migrate.js",
     "format:check": "node --check src/app.js && node --check src/index.js && node --check src/logger.js && node --check scripts/migrate.js"
   },
   "keywords": [
@@ -27,6 +27,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "axios": "^1.20.0",
     "better-sqlite3": "^9.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
