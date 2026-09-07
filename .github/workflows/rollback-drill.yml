@@ -13,7 +13,7 @@ jobs:
     environment: staging
     steps:
       - name: Deploy previous version (deterministic, saved tag)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -29,7 +29,7 @@ jobs:
             docker compose ps | grep -q "healthy" || exit 1
 
       - name: Redeploy current version
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}

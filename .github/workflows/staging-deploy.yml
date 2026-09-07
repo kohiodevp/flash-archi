@@ -53,7 +53,7 @@ jobs:
     environment: staging
     steps:
       - name: Save current image tag (for deterministic rollback)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -64,7 +64,7 @@ jobs:
             echo "$CURRENT_TAG" > .previous-image-tag
 
       - name: Pull and deploy
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -77,7 +77,7 @@ jobs:
             docker compose ps | grep -q "healthy" || exit 1
 
       - name: Run database migrations
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -125,7 +125,7 @@ jobs:
     environment: staging
     steps:
       - name: Rollback to previous image (deterministic, saved tag)
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
@@ -152,7 +152,7 @@ jobs:
           webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
       - name: Create Grafana annotation
         if: success()
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.STAGING_HOST }}
           username: ${{ secrets.STAGING_USER }}
