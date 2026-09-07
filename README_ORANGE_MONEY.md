@@ -184,6 +184,53 @@ Cas d'erreur gérés :
 
 ---
 
+## 8. Sécurité des webhooks (Phase 3A — renforcée)
+
+Les webhooks Orange Money sont des endpoints **publics**. Sans vérification
+cryptographique, un attaquant pourrait envoyer de faux webhooks et activer des
+abonnements PRO gratuitement. Flash-Archi applique plusieurs couches :
+
+### 7.1 Vérification HMAC-SHA256
+
+- Chaque webhook doit porter un header **`X-Orange-Signature`**.
+- La signature est calculée en **HMAC-SHA256** du **corps brut** (`req.rawBody`)
+  avec `ORANGE_WEBHOOK_SECRET` (comparaison à temps constant → anti timing-attack).
+- Signature absente ou invalide → **401 Unauthorized** (rejet immédiat).
+- L'auto-autorisation des webhooks "non signés" n'est possible que dans les
+  environnements `development`/`test` **sans secret configuré** — jamais en prod.
+
+### 7.2 Contrôle du montant (anti-altération)
+
+- Le webhook ne fait **pas confiance** à son propre corps : il rappelle
+  `orangeMoneyService.checkPaymentStatus(token)` et compare le **montant vérifié
+  par Orange** au montant attendu en base.
+- Toute divergence → log `FRAUD` + **400 Bad Request** + paiement marqué `failed`.
+
+### 7.3 Idempotence (anti double-crédit)
+
+- `paymentStore.confirmPayment()` n'active un plan / ne crédite le quota que si le
+  paiement n'était **pas déjà `accepted`**.
+- Un webhook dupliqué (retry Orange, rejeu) est reçu puis **ignoré** : le quota ne
+  passe jamais à 100 pour un seul paiement.
+
+### 7.4 Rate limiting renforcé
+
+- **Max 10 requêtes/minute par IP** sur `/api/payment/orange/webhook`.
+- Les IPs qui déclenchent la limite sont loguées comme **suspectes**.
+
+### 7.5 Monitoring & audit
+
+Chaque webhook est logué (pino, JSON) avec :
+- IP source, timestamp, chemin, `orderId`
+- Résultat : `success` | `fraud` | `error`
+
+Consultez : `docker logs flash-archi-api | grep webhook`.
+
+Configuration : `ORANGE_WEBHOOK_SECRET=your_webhook_secret_here` dans `.env`
+(voir `.env.example`). En production, ce secret est **obligatoire**.
+
+---
+
 ## Sécurité (rappel)
 
 1. `ORANGE_CLIENT_SECRET` et `ORANGE_MERCHANT_KEY` : **jamais commités**, jamais
@@ -198,8 +245,13 @@ Cas d'erreur gérés :
 
 ## Fichiers concernés
 
-- Backend : `src/services/orange-money.js`, `src/payments-store.js`,
-  `src/routes/payment.js`, intégrations dans `src/app.js` et `.env.example`.
+- Backend paiement : `src/services/orange-money.js`, `src/payments-store.js`,
+  `src/routes/payment.js`, `src/webhookSecurity.js` (HMAC + rate-limit + audit),
+  intégrations dans `src/app.js` et `.env.example`.
+- Backend moteur (Phase 3B) : `src/services/{facade-generator,plan-generator,llm-provider}.js`,
+  `src/engine.js` (fallbacks robustes), `src/jobs.js` (cache de prompts),
+  `src/queue.js` (file d'attente bornée), `sharp` (SVG→PNG).
 - Frontend : `src/views/{Pricing,Checkout,CheckoutSuccess,CheckoutCancel,Account}View.vue`,
   `src/router/index.ts`, `src/api/{client,types}.ts`, `src/components/AppNavBar.vue`.
-- Tests : `tests/e2e-payment-sim.mjs`.
+- Tests : `tests/payment-store.test.mjs`, `tests/webhook-security.test.mjs`,
+  `tests/job-store.test.mjs`, `tests/e2e-payment-sim.mjs`, `tests/e2e-hmac-webhook.mjs`.

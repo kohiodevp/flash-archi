@@ -30,22 +30,44 @@ async function llmCall(system, userText) {
   return text
 }
 
-export async function generateArchitecture(userPrompt) {
-  // 1) Intention
+export async function generateArchitecture(userPrompt, { onProgress } = {}) {
+  const progress = (stage, percent) => { try { onProgress?.({ stage, percent }) } catch { /* best-effort */ } }
+
+  // 1) Intention — LLM d'abord, fallback robuste (détection regex/mock).
+  //    Un LLM local imparfait (JSON invalide) ne doit jamais casser la
+  //    génération : on retombe sur une extraction déterministe.
+  progress('Analyse du prompt…', 10)
   const intentSystem =
     'Tu es un assistant d’extraction de spécifications architecturales. ' +
     'Extrais notamment, si l’info est disponible : la surface (m²), le nombre de pièces, ' +
     'le style, le nombre d’étages (storeys) et la hauteur par étage (heightPerStorey, en mètres, défaut 3.0). ' +
     'Retourne uniquement un objet JSON conforme au schéma suivant : ' +
     JSON.stringify(FlashSpec.shape)
-  const intentRaw = await llmCall(intentSystem, userPrompt)
-  const specParse = FlashSpec.safeParse(JSON.parse(extractJson(intentRaw)))
-  if (!specParse.success) {
-    throw new Error(`Échec d’extraction d’intention : ${specParse.error.message}`)
-  }
-  const spec = specParse.data
 
-  // 2) Plan 2D
+  const { mockIntentFn } = await import('./llm.js')
+  const isConfigError = (msg) =>
+    /provider inconnu|clé api manquante|provider échoué|inconnu|inexistant/i.test(msg ?? '')
+  let spec
+  try {
+    const intentRaw = await llmCall(intentSystem, userPrompt)
+    const specParse = FlashSpec.safeParse(JSON.parse(extractJson(intentRaw)))
+    if (!specParse.success) throw new Error(specParse.error.message)
+    spec = specParse.data
+  } catch (intentErr) {
+    // Ne JAMAIS masquer une erreur de configuration (provider inconnu,
+    // clé manquante) derrière le fallback : c'est un signal d'infra.
+    if (isConfigError(intentErr.message)) throw intentErr
+    // Sinon (LLM local imparfait / JSON invalide) → extraction déterministe.
+    console.warn(`[engine] intention LLM défaillante (${intentErr.message}) → fallback déterministe`)
+    const fallback = mockIntentFn(userPrompt)
+    const specParse = FlashSpec.safeParse(fallback)
+    if (!specParse.success) throw new Error(`Échec d’extraction d’intention : ${specParse.error.message}`)
+    spec = specParse.data
+  }
+  progress('Génération du plan 2D…', 30)
+
+  // 2) Plan 2D — LLM d'abord, fallback paramétrique (plan-generator) si le
+  //    plan LLM est absent, illisible ou trop sommaire (< 200 caractères).
   const plan2dSystem =
     'Tu es un architecte technique. À partir des spécifications suivantes, génère un plan d’étage 2D au format SVG. ' +
     'Inclus murs, portes, fenêtres, dimensions, légende, orientation Nord et échelle 1/50. ' +
@@ -59,42 +81,31 @@ export async function generateArchitecture(userPrompt) {
     Couleurs façade/volets : ${spec.facadeColor ?? 'non précisé'} / ${spec.shutterColor ?? 'non précisé'}
     Garage : ${spec.garage ?? 'aucun'}
   `
-  const plan2dRaw = await llmCall(plan2dSystem, plan2dUser)
-  const plan2dParse = FlashPlan2DOutput.safeParse(JSON.parse(extractJson(plan2dRaw)))
-  if (!plan2dParse.success) {
-    throw new Error(`Échec de génération du plan 2D : ${plan2dParse.error.message}`)
+  let plan2d
+  try {
+    const plan2dRaw = await llmCall(plan2dSystem, plan2dUser)
+    const plan2dParse = FlashPlan2DOutput.safeParse(JSON.parse(extractJson(plan2dRaw)))
+    if (!plan2dParse.success) throw new Error(plan2dParse.error.message)
+    // Garde-fou : un plan LLM trop court est considéré invalide → fallback.
+    if (!plan2dParse.data.svg || plan2dParse.data.svg.length < 200) {
+      throw new Error('SVG du plan trop court (< 200 car.)')
+    }
+    plan2d = plan2dParse.data
+  } catch (planErr) {
+    const { buildPlan2D } = await import('./services/plan-generator.js')
+    const gen = buildPlan2D(spec)
+    console.warn(`[engine] plan LLM défaillant (${planErr.message}) → fallback paramétrique`)
+    plan2d = gen
   }
-  const plan2d = plan2dParse.data
 
-  // 3) Façades (4 vues)
-  const facadesSystem =
-    'Génère les 4 élévations (Nord, Sud, Est, Ouest) d’un bâtiment dont les spécifications sont fournies. ' +
-    'Pour chaque façade, renvoie une image PNG encodée en base64. ' +
-    'Formate ta réponse exactement comme suit, sans aucun texte supplémentaire :' +
-    '\n---NORD---\n<base64>\n---SUD---\n<base64>\n---EST---\n<base64>\n---OUEST---\n<base64>'
-  const facadesRaw = await llmCall(facadesSystem, JSON.stringify(spec))
-  const rawText = facadesRaw.trim()
-  const parts = rawText.split(/---(NORD|SUD|EST|OUEST)---/)
-  const FACADE_KEY = { NORD: 'north', SUD: 'south', EST: 'east', OUEST: 'west' }
-  const facadeMap = {}
-  for (let i = 1; i < parts.length; i += 2) {
-    const raw = parts[i]
-    const value = parts[i + 1]
-    if (raw === undefined || value === undefined) continue
-    const key = FACADE_KEY[raw.toUpperCase()] ?? raw.toLowerCase()
-    if (value.trim()) facadeMap[key] = value.trim()
-  }
-  const facadeObj = {
-    north: facadeMap.north ?? '',
-    south: facadeMap.south ?? '',
-    east: facadeMap.east ?? '',
-    west: facadeMap.west ?? '',
-  }
-  const facadesParse = FlashFacadeOutput.safeParse(facadeObj)
-  if (!facadesParse.success) {
-    throw new Error(`Échec de génération des façades : ${facadesParse.error.message}`)
-  }
-  const facades = facadesParse.data
+  progress('Génération des façades…', 60)
+  // 3) Façades (4 vues) — GÉNÉRATEUR PARAMÉTRIQUE (Option B).
+  //    Remplaçant le mock 1×1 pixel : façades réalistes (murs, fenêtres,
+  //    porte, toit) dérivées de la spec, déterministes, coût nul.
+  //    Atomic : si un vrai LLM image est branché plus tard, on peut y re-router.
+  const { generateAllFacades, completeSpec } = await import('./services/facade-generator.js')
+  const facades = await generateAllFacades(completeSpec(spec))
+  progress('Calcul des métriques BIM…', 82)
 
   // 4) Maquette IFC4 (Export BIM pour l'homologation)
   //    Déterministe (pas de LLM) : binaire IFC4 encodé en base64.
@@ -103,6 +114,7 @@ export async function generateArchitecture(userPrompt) {
   const ifcBytes = generateIfcModel(spec, openings)
   const ifcBase64 = Buffer.from(ifcBytes).toString('base64')
   const ifcModel = `data:application/step;base64,${ifcBase64}`
+  progress('Finalisation…', 96)
 
   // 5) Métriques BIM dérivées (empreinte, volume, ouvertures réelles)
   const footprintArea = spec.surface

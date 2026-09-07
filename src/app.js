@@ -2,7 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import { RailwayStatus } from './schemas.js';
 import { generateArchitecture, ENGINE } from './engine.js';
-import { jobStore, runJobAsync, subscribe, JOB_STATUS } from './jobs.js';
+import { jobStore, runJobAsync, subscribe, JOB_STATUS, emit } from './jobs.js';
+import jobQueue from './queue.js';
+const emitBus = emit;
 import { validateGenerateRequest } from './validators.js';
 import { authenticate } from './auth.js';
 import rateLimit from 'express-rate-limit';
@@ -27,7 +29,11 @@ const openApiSpec = YAML.load(path.join(__dirname, '..', 'openapi', 'spec.yaml')
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  // Capture le corps brut pour la validation HMAC des webhooks.
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
 const { logger, httpLogger } = createLogger();
 app.use(requestId);
@@ -126,7 +132,7 @@ app.get('/api/flash-archi/jobs', (req, res) => {
 });
 
 // ---- POST /generate ------------------------------------------
-app.post('/api/flash-archi/generate', (req, res) => {
+app.post('/api/flash-archi/generate', async (req, res) => {
   const check = validateGenerateRequest(req.body);
   if (!check.ok) {
     res.status(400).json(check.details ? { error: check.error, details: check.details } : { error: check.error });
@@ -147,10 +153,40 @@ app.post('/api/flash-archi/generate', (req, res) => {
     }
   }
 
+  // Cache de prompts équivalents (Phase 3B) : si un prompt normalisé identique
+  // a déjà produit un job complété récent, on renvoie ce résultat (cache hit)
+  // au lieu de relancer une génération coûteuse.
+  const cached = jobStore.findCached(prompt);
+  if (cached?.result) {
+    logger.info({ promptHash: jobStore.hashPrompt(prompt) }, 'generate: cache hit');
+    return res.status(200).json({
+      jobId: cached.id,
+      status: cached.status,
+      result: cached.result,
+      cached: true,
+      createdAt: cached.createdAt,
+    });
+  }
+
   const job = jobStore.create(prompt);
-  runJobAsync(generateArchitecture, job.id, job.prompt) // asynchrone, ne bloque pas la réponse
-  res.status(202).json({ jobId: job.id, status: job.status });
+  // File d'attente bornée (max 3 concurrents) + progression via onProgress.
+  jobQueue.enqueue(job.id, () => {
+    // Émet la progression réelle des étapes du moteur vers le flux SSE.
+    return runJobAsync(generateArchitecture, job.id, job.prompt, {
+      onProgress: (p) => emitJobProgressDirect(job.id, p),
+      onDone: (jobId, result, err) => { if (!err && result) jobStore.saveCache(prompt, jobId); },
+    });
+  }).catch((err) => {
+    // Rare : la queue propage une erreur non gérée par runJobAsync.
+    jobStore.updateStatus(job.id, JOB_STATUS.FAILED, { error: err?.message ?? String(err) });
+  });
+  res.status(202).json({ jobId: job.id, status: job.status, queued: true });
 });
+
+// Re-export local : émetteur de progression (importé de jobs.js subscribe/emit).
+function emitJobProgressDirect(jobId, { stage, percent }) {
+  emitBus(jobId, { type: 'progress', stage, percent });
+}
 
 // ---- GET /jobs/:id -------------------------------------------
 app.get('/api/flash-archi/jobs/:id', (req, res) => {

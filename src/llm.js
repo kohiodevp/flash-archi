@@ -79,6 +79,7 @@ function mockIntent(text) {
     shutterColor: 'bleu',
   }
 }
+export const mockIntentFn = mockIntent
 
 async function callSeekai({ baseUrl, apiKey, model, system, user, temperature }) {
   const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {

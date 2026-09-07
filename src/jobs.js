@@ -4,7 +4,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { config, PROJECT_ROOT } from './config.js'
 
 export const JOB_STATUS = Object.freeze({
@@ -35,7 +35,60 @@ export class JobStore {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+
+      -- Cache de prompts : hash normalisé -> job complété (Phase 3B).
+      CREATE TABLE IF NOT EXISTS prompt_cache (
+        prompt_hash TEXT PRIMARY KEY,
+        job_id      TEXT NOT NULL,
+        prompt      TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_prompt_cache_job ON prompt_cache(job_id);
     `)
+  }
+
+  // ---- Cache de prompts (Phase 3B) ----
+
+  /** Normalise un prompt : minuscules, espaces resserés, mots vides retirés. */
+  static normalizePrompt(raw) {
+    const STOP = new Set(['le', 'la', 'les', 'un', 'une', 'des', 'de', 'du', 'et', 'ou', 'avec', 'pour', 'sur', 'dans', 'sous', 'à', 'au', 'aux'])
+    return raw
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // û/é/è → u/e (invariant aux accents)
+      .replace(/(\d)m2/g, '$1 m2')      // 120m2 → 120 m2 (fusion)
+      .replace(/(\d)\s*(?:m2|m²)/g, '$1 m2')
+      .replace(/(\d)chambres?/g, '$1 chambres') // 4chambres → 4 chambres
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 1 && !STOP.has(w))
+      .sort()
+      .join(' ')
+  }
+
+  hashPrompt(prompt) {
+    return createHash('sha256').update(JobStore.normalizePrompt(prompt)).digest('hex')
+  }
+
+  /** Retourne le job complété en cache si un prompt équivalent a déjà été généré. */
+  findCached(prompt, { ttlMs = 24 * 3600 * 1000 } = {}) {
+    const hash = this.hashPrompt(prompt)
+    const row = this.db.prepare('SELECT job_id, created_at FROM prompt_cache WHERE prompt_hash = ?').get(hash)
+    if (!row) return undefined
+    if (Date.now() - row.created_at > ttlMs) {
+      this.db.prepare('DELETE FROM prompt_cache WHERE prompt_hash = ?').run(hash)
+      return undefined
+    }
+    const job = this.get(row.job_id)
+    if (!job || job.status !== JOB_STATUS.COMPLETED || !job.result) return undefined
+    return this.serialize(job)
+  }
+
+  /** Mémorise le résult du job dans le cache de prompts. */
+  saveCache(prompt, jobId) {
+    const hash = this.hashPrompt(prompt)
+    this.db.prepare('INSERT OR REPLACE INTO prompt_cache (prompt_hash, job_id, prompt, created_at) VALUES (?, ?, ?, ?)')
+      .run(hash, jobId, prompt, Date.now())
   }
 
   create(prompt) {
@@ -122,7 +175,7 @@ export function emit(jobId, event) {
   }
 }
 
-export async function runJobAsync(runFn, jobId, prompt) {
+export async function runJobAsync(runFn, jobId, prompt, { onDone } = {}) {
   // runFn(prompt) -> result (async)
   jobStore.updateStatus(jobId, JOB_STATUS.PROCESSING)
   emit(jobId, { type: 'status', status: JOB_STATUS.PROCESSING })
@@ -130,6 +183,7 @@ export async function runJobAsync(runFn, jobId, prompt) {
     const result = await runFn(prompt)
     jobStore.updateStatus(jobId, JOB_STATUS.COMPLETED, { result })
     emit(jobId, { type: 'status', status: JOB_STATUS.COMPLETED, result })
+    try { onDone?.(jobId, result, null) } catch { /* best-effort */ }
     
     // Dispatch webhook for job.completed event
     // Note: In a real implementation, we would get the tenantId from the job context

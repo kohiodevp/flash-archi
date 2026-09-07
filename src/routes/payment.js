@@ -9,6 +9,7 @@ import { paymentStore, PAYMENT_BY_PLAN } from '../payments-store.js'
 import { authenticate } from '../auth.js'
 import rateLimit from 'express-rate-limit'
 import { createLogger } from '../logger.js'
+import { hmacWebhookMiddleware, webhookRateLimiter, webhookResultLogger } from '../webhookSecurity.js'
 
 const { logger } = createLogger()
 const paymentRouter = express.Router()
@@ -64,47 +65,64 @@ paymentRouter.post('/create', createPaymentLimiter, authenticate, async (req, re
 
 // ---- POST /api/payment/orange/webhook -------------------------
 // Notification Orange Money. ROUTE PUBLIQUE (pas de Bearer) — appelée par
-// Orange. on relit l'état auprès de l'API Orange pour valider la transaction.
-paymentRouter.post('/orange/webhook', express.json({ limit: '256kb' }), async (req, res) => {
-  logger.info({ body: req.body }, 'Orange webhook received')
-  const { token } = req.body ?? {}
-  if (!token) {
-    return res.status(400).json({ error: 'Missing token.' })
-  }
-  try {
-    const payment = paymentStore.getByToken(token)
-    if (!payment) {
-      logger.warn({ token }, 'webhook: payment not found for token')
-      return res.status(404).json({ error: 'Payment not found.' })
+// Orange. SÉCURITÉ : signature HMAC (X-Orange-Signature) + rate-limit
+// renforcé (10/min/IP) + relecture de l'état auprès d'Orange + contrôle du
+// montant. Logging structuré du résultat (success/fraud/error).
+paymentRouter.post(
+  '/orange/webhook',
+  webhookRateLimiter({ windowMs: 60_000, max: 10 }),
+  express.json({ limit: '256kb' }),
+  hmacWebhookMiddleware({ headerName: 'X-Orange-Signature' }),
+  webhookResultLogger('payment'),
+  async (req, res) => {
+    logger.info({ audit: req.webhookAudit }, 'Orange webhook received')
+    const { token } = req.body ?? {}
+    if (!token) {
+      return res.status(400).json({ error: 'Missing token.' })
     }
-    const omStatus = await orangeMoneyService.checkPaymentStatus(token)
-    const status = omStatus.status
-    logger.info({ orderId: payment.order_id, orangeStatus: status }, 'webhook: orange status')
+    try {
+      const payment = paymentStore.getByToken(token)
+      if (!payment) {
+        logger.warn({ token, audit: req.webhookAudit }, 'webhook: payment not found for token')
+        return res.status(404).json({ error: 'Payment not found.' })
+      }
+      const omStatus = await orangeMoneyService.checkPaymentStatus(token)
+      const status = omStatus.status
+      logger.info({ orderId: payment.order_id, orangeStatus: status }, 'webhook: orange status')
 
-    // Vérification du montant pour éviter toute altération.
-    if (payment.amount !== omStatus.amount && status === 'SUCCESSFUL') {
-      logger.error({ orderId: payment.order_id, expected: payment.amount, received: omStatus.amount }, 'webhook: amount mismatch')
-      paymentStore.setStatus(payment.order_id, 'failed', { notes: 'Amount mismatch' })
-      return res.status(400).json({ error: 'Amount mismatch.' })
-    }
+      // Anti-fraude : le montant renvoyé par Orange doit correspondre exactement.
+      if (status === 'SUCCESSFUL' && Number(omStatus.amount) !== Number(payment.amount)) {
+        logger.error({
+          orderId: payment.order_id,
+          expected: payment.amount,
+          received: omStatus.amount,
+          audit: req.webhookAudit,
+          fraud: true,
+        }, 'FRAUD: webhook amount mismatch')
+        paymentStore.setStatus(payment.order_id, 'failed', { notes: 'Amount mismatch' })
+        return res.status(400).json({ error: 'Amount mismatch.' })
+      }
 
-    if (status === 'SUCCESSFUL') {
-      paymentStore.setAccepted(payment.order_id, omStatus.txid)
-      paymentStore.activatePlan(payment.user_id, payment.plan, payment.id)
-      logger.info({ orderId: payment.order_id, userId: payment.user_id, plan: payment.plan }, 'payment accepted, plan activated')
-    } else if (status === 'FAILED') {
-      paymentStore.setStatus(payment.order_id, 'refused', { notes: 'Orange returned FAILED' })
-    } else if (status === 'CANCELLED') {
-      paymentStore.setStatus(payment.order_id, 'cancelled', { notes: 'Orange returned CANCELLED' })
-    } else {
-      logger.info({ orderId: payment.order_id, status }, 'webhook: payment still pending')
+      if (status === 'SUCCESSFUL') {
+        // Confirmation IDEMPOTENTE : un webhook dupliqué ne crédite pas 2×.
+        const result = paymentStore.confirmPayment(payment.order_id, { txid: omStatus.txid })
+        logger.info({ orderId: payment.order_id, userId: payment.user_id, plan: payment.plan, ...result }, 'payment accepted, plan activated')
+        return res.json({ status: 'received', ...result })
+      }
+      if (status === 'FAILED') {
+        paymentStore.setStatus(payment.order_id, 'refused', { notes: 'Orange returned FAILED' })
+      } else if (status === 'CANCELLED') {
+        paymentStore.setStatus(payment.order_id, 'cancelled', { notes: 'Orange returned CANCELLED' })
+      } else {
+        logger.info({ orderId: payment.order_id, status }, 'webhook: payment still pending')
+      }
+      return res.json({ status: 'received' })
+    } catch (err) {
+      logger.error({ err: err.message, audit: req.webhookAudit }, 'webhook processing failed')
+      return res.status(500).json({ error: 'Internal server error.' })
     }
-    return res.json({ status: 'received' })
-  } catch (err) {
-    logger.error({ err: err.message }, 'webhook processing failed')
-    return res.status(500).json({ error: 'Internal server error.' })
   }
-})
+)
 
 // ---- GET /api/payment/status/:orderId -------------------------
 paymentRouter.get('/status/:orderId', authenticate, async (req, res) => {

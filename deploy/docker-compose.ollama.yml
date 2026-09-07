@@ -1,0 +1,39 @@
+# ===========================================================
+# Ollama — service LLM local (optionnel)
+# ===========================================================
+# Le conteneur ollama est indépendant de l'API Flash-Archi
+# (il pré-existait sur l'hôte) et a été connecté au réseau npm-net
+# pour être joint par nom par l'API : `docker network connect npm-net ollama`.
+#
+# Ce fichier est une RÉFÉRENCE pour recréer proprement le service
+# sur une autre machine. Ici NE PAS lancer `docker compose up` sur ce
+# fichier si le conteneur `ollama` existe déjà (conflit de nom) —
+# utilisez la commande réseau de connexion décrite ci-dessus.
+# ===========================================================
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    # Exposé uniquement sur localhost de l'hôte (sécurité).
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - npm-net
+
+volumes:
+  ollama_data:
+    # NB : si le volume `ollama_data` n'est pas défini sur l'hôte (pré-existant),
+    # ce nouveau volume serait vide → modèles à re-télécharger. Vérifiez avant.
+
+networks:
+  npm-net:
+    external: true
+    name: npm-net
+
+# --- Modèles utiles (à tirer dans le conteneur) ---
+# docker exec ollama ollama pull qwen2.5:3b-instruct   # extraction JSON (CPU ok)
+# docker exec ollama ollama pull llama3.1:8b           # plus puissant (lent CPU)
+# docker exec ollama ollama pull qwen2.5:7b            # tout usage (4.7 Go)

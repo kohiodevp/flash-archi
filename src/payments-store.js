@@ -88,6 +88,31 @@ export class PaymentStore {
       .run({ orderId, txid: txid ?? null })
   }
 
+  /**
+   * Confirmation de paiement IDEMPOTENTE.
+   * - Si le paiement est déjà 'accepted' (webhook dupliqué) → ne recontrèdite
+   *   pas le plan (aucune double activation).
+   * - Si 'accepted' → active le plan + crédite le quota, renvoie {credited:true}.
+   * - Sinon → passe 'accepted' et crédite.
+   * @returns {{alreadyCredited: boolean}}
+   */
+  confirmPayment(orderId, { txid, planOverride } = {}) {
+    const payment = this.getByOrderId(orderId)
+    if (!payment) return { notFound: true }
+    if (payment.status === 'accepted') {
+      // Webhook dupliqué : déjà crédité → idempotent.
+      this.db.prepare(`UPDATE payments SET updated_at = CURRENT_TIMESTAMP WHERE order_id = ?`).run(orderId)
+      return { alreadyCredited: true }
+    }
+    this.setAccepted(orderId, txid)
+    const plan = planOverride ?? payment.plan
+    const user = this.getUser(payment.user_id)
+    if (user) {
+      this.activatePlan(payment.user_id, plan, payment.id)
+    }
+    return { alreadyCredited: false }
+  }
+
   getByOrderId(orderId) {
     return this.db.prepare(`SELECT * FROM payments WHERE order_id = ?`).get(orderId)
   }
