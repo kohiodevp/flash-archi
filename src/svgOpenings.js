@@ -44,15 +44,14 @@ function detectWindows(svg) {
   return out
 }
 
-/** Détecte les portes = traits fins contrastés (lignes isolées). */
+/** Détecte les portes = arcs fins contrastés (symbol plan) ou traits fins. */
 function detectDoors(svg) {
   const out = []
-  // Match <line ...> or <path ...> (self-closing or not)
+  // Match <line ...> ou <path ...> (auto-fermant ou non)
   const re = /<(line|path)[^>]*>/gi
   let m
   while ((m = re.exec(svg))) {
-    const tag = m[0] // e.g. "<line x1=\"1\" y1=\"2\" x2=\"3\" y2=\"4\" stroke=\"#d30\"/>"
-    // Remove the leading '<' and trailing '>' (maybe '/>' ) to get the inner
+    const tag = m[0]
     let inner = tag.slice(1, -1)
     if (inner.endsWith('/')) inner = inner.slice(0, -1).trimEnd()
     const a = tagAttrs(inner)
@@ -61,14 +60,20 @@ function detectDoors(svg) {
     const isWallThick = strokeWidth >= 3
     const hasOpeningColor = /#c00|#d30|red|#f00/i.test(a.stroke ?? '')
     if (isWallThick || !hasOpeningColor) continue
-    // Porte/vid delta : segment COURt (une cloison pleine est longue).
     const x1 = num(a.x1); const y1 = num(a.y1)
     const x2 = num(a.x2); const y2 = num(a.y2)
     if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+      // <line> : porte/vid delta = segment COURt (une cloison pleine est longue).
       const len = Math.hypot(x2 - x1, y2 - y1)
       if (len >= 4 && len < 200) {
         out.push({ type: 'door', x: Math.min(x1, x2), y: Math.min(y1, y2), w: len, h: strokeWidth })
       }
+    } else if (tag.startsWith('<path')) {
+      // <path> : arc de porte (ex. <path d="M … A …" stroke="#d30" stroke-width="2">).
+      // Un arc fin et contrasté = porte (pas de coordonnées simples, mais le
+      // symbole est sans ambiguïté). On évite les doubles coûts en consommant
+      // la porte ; l'IFC n'a besoin que du type + une géométrie indicative.
+      out.push({ type: 'door', x: 0, y: 0, w: strokeWidth * 20 + 40, h: strokeWidth })
     }
   }
   return out

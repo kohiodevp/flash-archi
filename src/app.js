@@ -140,6 +140,23 @@ app.post('/api/flash-archi/generate', async (req, res) => {
   }
   const { prompt } = check.data;
 
+  // Cache de prompts équivalents (Phase 3B) : si un prompt normalisé identique
+  // a déjà produit un job complété récent, on renvoie ce résultat (cache hit)
+  // au lieu de relancer une génération coûteuse. Vérifié AVANT la consommation
+  // de quota : un client à quota épuisé peut revoir ses anciens plans, et un
+  // cache hit n'est jamais facturé.
+  const cached = jobStore.findCached(prompt);
+  if (cached?.result) {
+    logger.info({ promptHash: jobStore.hashPrompt(prompt) }, 'generate: cache hit');
+    return res.status(200).json({
+      jobId: cached.id,
+      status: cached.status,
+      result: cached.result,
+      cached: true,
+      createdAt: cached.createdAt,
+    });
+  }
+
   // Quota mensuel (P3-03) : uniquement si le compte existe dans le store
   // (donc abonnement en cours) — les tests/anciens clients sans compte
   // restent inchangés pour ne pas casser la rétro-compat.
@@ -151,21 +168,6 @@ app.post('/api/flash-archi/generate', async (req, res) => {
         message: 'Quota mensuel épuisé. Passez au plan PRO pour continuer.',
       });
     }
-  }
-
-  // Cache de prompts équivalents (Phase 3B) : si un prompt normalisé identique
-  // a déjà produit un job complété récent, on renvoie ce résultat (cache hit)
-  // au lieu de relancer une génération coûteuse.
-  const cached = jobStore.findCached(prompt);
-  if (cached?.result) {
-    logger.info({ promptHash: jobStore.hashPrompt(prompt) }, 'generate: cache hit');
-    return res.status(200).json({
-      jobId: cached.id,
-      status: cached.status,
-      result: cached.result,
-      cached: true,
-      createdAt: cached.createdAt,
-    });
   }
 
   const job = jobStore.create(prompt);

@@ -66,36 +66,35 @@ export async function generateArchitecture(userPrompt, { onProgress } = {}) {
   }
   progress('Génération du plan 2D…', 30)
 
-  // 2) Plan 2D — LLM d'abord, fallback paramétrique (plan-generator) si le
-  //    plan LLM est absent, illisible ou trop sommaire (< 200 caractères).
-  const plan2dSystem =
-    'Tu es un architecte technique. À partir des spécifications suivantes, génère un plan d’étage 2D au format SVG. ' +
-    'Inclus murs, portes, fenêtres, dimensions, légende, orientation Nord et échelle 1/50. ' +
-    'Réponds uniquement avec un objet JSON contenant les champs : { "svg": "<svg>…</svg>", "scale": 50, "legend": "..." }. ' +
-    'Aucun texte supplémentaire.'
-  const plan2dUser = `
-    Surface : ${spec.surface} m²
-    Chambres : ${spec.rooms}
-    Style : ${spec.style ?? 'non précisé'}
-    Toit : ${spec.roof ?? 'non précisé'}
-    Couleurs façade/volets : ${spec.facadeColor ?? 'non précisé'} / ${spec.shutterColor ?? 'non précisé'}
-    Garage : ${spec.garage ?? 'aucun'}
-  `
+  // 2) Plan 2D — GÉNÉRATEUR PARAMÉTRIQUE PRIORITAIRE.
+  //    Toujours détaillé (murs, portes, fenêtres, cotes, labels, échelle) : on
+  //    n'attend plus un LLM pour dessiner. Le LLM sert uniquement à extraire
+  //    l'intention/spec (étape 1). Fallback : si la génération paramétrique
+  //    échoue (cas rare), on retombe sur l'appel LLM existant.
+  const { buildPlan2D } = await import('./services/plan-generator.js')
   let plan2d
   try {
+    plan2d = buildPlan2D(spec)
+    if (!plan2d?.svg || plan2d.svg.length < 1) throw new Error('plan paramétrique vide')
+  } catch (planErr) {
+    console.warn(`[engine] plan paramétrique défaillant (${planErr.message}) → fallback LLM`)
+    const plan2dSystem =
+      'Tu es un architecte technique. À partir des spécifications suivantes, génère un plan d’étage 2D au format SVG. ' +
+      'Inclus murs, portes, fenêtres, dimensions, légende, orientation Nord et échelle 1/50. ' +
+      'Réponds uniquement avec un objet JSON contenant les champs : { "svg": "<svg>…</svg>", "scale": 50, "legend": "..." }. ' +
+      'Aucun texte supplémentaire.'
+    const plan2dUser = `
+      Surface : ${spec.surface} m²
+      Chambres : ${spec.rooms}
+      Style : ${spec.style ?? 'non précisé'}
+      Toit : ${spec.roof ?? 'non précisé'}
+      Couleurs façade/volets : ${spec.facadeColor ?? 'non précisé'} / ${spec.shutterColor ?? 'non précisé'}
+      Garage : ${spec.garage ?? 'aucun'}
+    `
     const plan2dRaw = await llmCall(plan2dSystem, plan2dUser)
     const plan2dParse = FlashPlan2DOutput.safeParse(JSON.parse(extractJson(plan2dRaw)))
-    if (!plan2dParse.success) throw new Error(plan2dParse.error.message)
-    // Garde-fou : un plan LLM trop court est considéré invalide → fallback.
-    if (!plan2dParse.data.svg || plan2dParse.data.svg.length < 200) {
-      throw new Error('SVG du plan trop court (< 200 car.)')
-    }
+    if (!plan2dParse.success) throw new Error(`Échec du plan LLM : ${plan2dParse.error.message}`)
     plan2d = plan2dParse.data
-  } catch (planErr) {
-    const { buildPlan2D } = await import('./services/plan-generator.js')
-    const gen = buildPlan2D(spec)
-    console.warn(`[engine] plan LLM défaillant (${planErr.message}) → fallback paramétrique`)
-    plan2d = gen
   }
 
   progress('Génération des façades…', 60)

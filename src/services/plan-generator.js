@@ -71,7 +71,10 @@ export function buildPlan2D(spec) {
     }
   }
 
-  // Portes (arc) + fenêtres (double trait) sur le mur extérieur
+  // Portes (arc) + fenêtres sur le mur extérieur — symboles conformes aux
+  // conventions du moteur (svgOpenings.js) :
+  //   - fenêtre = <circle fill="white"> posé sur le mur (symbol standard plan)
+  //   - porte   = arc fin rouge (#d30, stroke-width 2) — détecté comme door
   const doorSize = 40
   const doorX = ox + outerW / 2
   const doorY = oy + outerH
@@ -81,13 +84,13 @@ export function buildPlan2D(spec) {
     <path d="M ${doorX} ${doorY} A ${doorSize} ${doorSize} 0 0 0 ${doorX - doorSize} ${doorY}" fill="none" stroke="#d30" stroke-width="2"/>
   </g>`
 
-  const winSize = 70
-  const winY = oy
+  const winSize = 26
+  const winR = winSize / 2
   const fenetres = `<g>
-    <line x1="${ox + 60}" y1="${winY}" x2="${ox + 60 + winSize}" y2="${winY}" stroke="#0a7" stroke-width="8"/>
-    <line x1="${ox + outerW - 60 - winSize}" y1="${winY}" x2="${ox + outerW - 60}" y2="${winY}" stroke="#0a7" stroke-width="8"/>
-    <line x1="${ox}" y1="${oy + 60}" x2="${ox}" y2="${oy + 60 + winSize}" stroke="#0a7" stroke-width="8"/>
-    <line x1="${ox + outerW}" y1="${oy + 60}" x2="${ox + outerW}" y2="${oy + 60 + winSize}" stroke="#0a7" stroke-width="8"/>
+    <circle cx="${ox + 60 + winR}" cy="${oy + winR}" r="${winR}" fill="white" stroke="#0a7" stroke-width="2"/>
+    <circle cx="${ox + outerW - 60 - winR}" cy="${oy + winR}" r="${winR}" fill="white" stroke="#0a7" stroke-width="2"/>
+    <circle cx="${ox + winR}" cy="${oy + 60 + winR}" r="${winR}" fill="white" stroke="#0a7" stroke-width="2"/>
+    <circle cx="${ox + outerW - winR}" cy="${oy + 60 + winR}" r="${winR}" fill="white" stroke="#0a7" stroke-width="2"/>
   </g>`
 
   // Cotes (dimensions)
