@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:26-alpine
 
 LABEL maintainer="Flash-Archi Team"
 LABEL version="3.3.0"
