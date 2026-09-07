@@ -73,7 +73,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -85,7 +85,7 @@ jobs:
       # Push poussé uniquement sur release (déploiement contrôlé)
       - name: Push image
         if: github.event_name == 'release'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
