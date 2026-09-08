@@ -41,8 +41,8 @@ test('génère une architecture complète (spec + plan2d + 4 façades + IFC + bi
   assert.ok(r.bimMetrics, 'bimMetrics attendu')
   assert.ok(typeof r.bimMetrics.footprintArea === 'number' && r.bimMetrics.footprintArea > 0)
   assert.ok(typeof r.bimMetrics.grossVolume === 'number' && r.bimMetrics.grossVolume > 0)
-  // Le plan paramétrique produit 4 fenêtres (cercles blancs) + 1 porte (arc) = 5 ouvertures
-  assert.equal(r.bimMetrics.openingCount, 5)
+  // Le plan paramétrique V2 produit 7 fenêtres + 1 porte d'entrée = 8 ouvertures
+  assert.equal(r.bimMetrics.openingCount, 8)
   const decodedWith = Buffer.from(r.ifcModel.split(',')[1], 'base64').toString('utf8')
   assert.match(decodedWith, /IFCOPENINGELEMENT/)
   // Nouveaux champs BIM : roofArea et totalVolume

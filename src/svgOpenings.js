@@ -2,16 +2,23 @@
 // Flash-Archi SaaS — Détection d'ouvertures dans le plan 2D (SVG)
 //
 // Analyse le SVG du plan d'étage généré et repère les symboles
-// d'ouvertures (fenêtres, portes). Conventions reconnues :
-//   - Fenêtre : <circle … fill="white"> posé sur un trait de mur
-//   - Porte    : <path> / <line> fin et contrasté, isolé
+// d'ouvertures (fenêtres, portes).
+//
+// Conventions reconnues (coexistence ancien/nouveau générateur) :
+//   - Fenêtre (plan paramétrique v2) : <rect class="window">  fill #e3f2fd
+//   - Fenêtre (ancien)               : <circle fill="white">
+//   - Porte (plan v2)                : <path class="door"> / <line class="door">
+//                                       stroke #8b4513 (arc d'entrée)
+//   - Porte (ancien)                 : <line>/<path> fin rouge (#c00|#d30)
 //
 // Retourne une liste d'ouvertures { type, x, y, w, h } en
-// coordonnées SVG (unité = px du viewBox). La conversion métrique
-// est laissée au générateur IFC via l'échelle.
+// coordonnées SVG (px du viewBox). La conversion métrique est
+// laissée au générateur IFC via l'échelle.
 // ===========================================================
 
 const WINDOW_FILL = /white|#[fF]{3,6}/ // fill blanc ou gris très clair
+const WINDOW_BLUE = /#e3f2fd|#0a7|#4a90e2/ // fenêtre paramétrique / ancien trait
+const WINDOW_CLASS = /(^|\s)window(\s|$)/i
 
 /** Extrait les attributs d'un tag SVG (balises auto-fermantes ou paires). */
 function tagAttrs(body) {
@@ -27,35 +34,63 @@ function num(v) {
   return Number.isFinite(n) ? n : null
 }
 
-/** Détecte les fenêtres = cercles blancs (symboles d'ouverture). */
+/** Détecte les fenêtres : <rect class="window"> (v2) + <circle> blancs (ancien). */
 function detectWindows(svg) {
   const out = []
-  const re = /<circle\b([^>]*)\/?>/gi
+  // Fenêtres paramétriques v2 : <rect class="window">
+  const rectRe = /<rect\b([^>]*)>/gi
   let m
-  while ((m = re.exec(svg))) {
+  while ((m = rectRe.exec(svg))) {
+    const a = tagAttrs(m[1])
+    if (!WINDOW_CLASS.test(a.class ?? '')) continue
+    const x = num(a.x); const y = num(a.y)
+    const w = num(a.width); const h = num(a.height)
+    if (x === null || y === null || w === null || h === null) continue
+    out.push({ type: 'window', x, y, w, h })
+  }
+  // Anciens cercles blancs (rétro-compat).
+  const circleRe = /<circle\b([^>]*)\/?>/gi
+  while ((m = circleRe.exec(svg))) {
     const a = tagAttrs(m[1])
     if (!WINDOW_FILL.test(a.fill ?? '')) continue
-    const cx = num(a.cx)
-    const cy = num(a.cy)
-    const r = num(a.r)
+    const cx = num(a.cx); const cy = num(a.cy); const r = num(a.r)
     if (cx === null || cy === null || r === null) continue
     out.push({ type: 'window', x: cx - r, y: cy - r, w: r * 2, h: r * 2, cx, cy, r })
   }
   return out
 }
 
-/** Détecte les portes = arcs fins contrastés (symbol plan) ou traits fins. */
+/** Détecte les portes : <path>/<line> class="door" (arc) ou fin rouge (ancien). */
 function detectDoors(svg) {
   const out = []
-  // Match <line ...> ou <path ...> (auto-fermant ou non)
-  const re = /<(line|path)[^>]*>/gi
+  let seenDoor = false // évite de compter deux fois l'arc + le battant d'une même porte
+  const re = /<(line|path|arc)[^>]*>/gi
   let m
   while ((m = re.exec(svg))) {
     const tag = m[0]
     let inner = tag.slice(1, -1)
     if (inner.endsWith('/')) inner = inner.slice(0, -1).trimEnd()
     const a = tagAttrs(inner)
-    // Ignorer les traits du plan structurel épais (murs) : on veut du fin.
+    const cls = a.class ?? ''
+    const isDoorClass = /(^|\s)door(\s|$)/i.test(cls)
+    if (isDoorClass) {
+      // Porte paramétrique v2 (arc d'entrée). Le plan dessine l'arc (<path>)
+      // ET le battant (<line>) ; on ne compte qu'UNE porte par groupe pour
+      // éviter le double comptage. On enregistre les coordonnées du premier
+      // élément du groupe pour donner une géométrie indicative à l'IFC.
+      if (!seenDoor) {
+        const x1 = num(a.x1); const y1 = num(a.y1)
+        let x = 0
+        // <path d="M x y A …"> : extraire le point de départ.
+        const d = a.d ?? ''
+        const dm = /^M\s+([-\d.]+)[,\s]+([-\d.]+)/i.exec(d.trim())
+        if (dm) { x = num(dm[1]) ?? 0 }
+        seenDoor = true
+        out.push({ type: 'door', x, y: num(a.y1) ?? num((/y1="([^"]+)"/.exec(m[0]) || [])[1]) ?? 0, w: 80, h: 6 })
+      }
+      continue
+    }
+    // --- rétro-compat : trait fin rouge (ancien générateur) ---
     const strokeWidth = num(a['stroke-width']) ?? num(a['strokeWidth']) ?? 2
     const isWallThick = strokeWidth >= 3
     const hasOpeningColor = /#c00|#d30|red|#f00/i.test(a.stroke ?? '')
@@ -63,17 +98,10 @@ function detectDoors(svg) {
     const x1 = num(a.x1); const y1 = num(a.y1)
     const x2 = num(a.x2); const y2 = num(a.y2)
     if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
-      // <line> : porte/vid delta = segment COURt (une cloison pleine est longue).
       const len = Math.hypot(x2 - x1, y2 - y1)
       if (len >= 4 && len < 200) {
         out.push({ type: 'door', x: Math.min(x1, x2), y: Math.min(y1, y2), w: len, h: strokeWidth })
       }
-    } else if (tag.startsWith('<path')) {
-      // <path> : arc de porte (ex. <path d="M … A …" stroke="#d30" stroke-width="2">).
-      // Un arc fin et contrasté = porte (pas de coordonnées simples, mais le
-      // symbole est sans ambiguïté). On évite les doubles coûts en consommant
-      // la porte ; l'IFC n'a besoin que du type + une géométrie indicative.
-      out.push({ type: 'door', x: 0, y: 0, w: strokeWidth * 20 + 40, h: strokeWidth })
     }
   }
   return out
