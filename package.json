@@ -53,7 +53,7 @@
     "@semantic-release/npm": "^13.1.5",
     "@semantic-release/release-notes-generator": "^14.1.1",
     "chai": "^6.2.2",
-    "playwright": "^1.62.1",
+    "playwright": "^1.63.0",
     "semantic-release": "^25.0.9",
     "sinon": "^22.1.0",
     "supertest": "^7.0.0"
